@@ -1,0 +1,145 @@
+简介
+Jaeger受Dapper和OpenZipkin的启发，是Uber Technologies公开发布的分布式跟踪系统。它用于监视和排除基于微服务的分布式系统，包括：
+
+分布式上下文传播
+分布式事务监控
+根本原因分析
+服务依赖性分析
+性能/延迟优化
+
+快速入门
+docker run -d --name jaeger \
+  -e COLLECTOR_ZIPKIN_HTTP_PORT=9411 \
+  -p 5775:5775/udp \
+  -p 6831:6831/udp \
+  -p 6832:6832/udp \
+  -p 5778:5778 \
+  -p 16686:16686 \
+  -p 14268:14268 \
+  -p 9411:9411 \
+  jaegertracing/all-in-one:1.13
+
+http://localhost:16686 访问Jaeger UI
+
+示例应用程序：HotROD
+docker run --rm -it \
+  --link jaeger \
+  -p8080-8083:8080-8083 \
+  -e JAEGER_AGENT_HOST="jaeger" \
+  jaegertracing/example-hotrod:1.13 \
+  all
+
+运行jaeger-agent
+## make sure to expose only the ports you use in your deployment scenario!
+docker run \
+  --rm \
+  -p6831:6831/udp \
+  -p6832:6832/udp \
+  -p5778:5778/tcp \
+  -p5775:5775/udp \
+  jaegertracing/jaeger-agent:1.13
+
+发现系统集成
+代理可以将点对点连接到单个收集器地址，这可以由跨多个收集器的另一个基础架构组件（例如DNS）进行负载平衡。代理还可以配置静态收集器地址列表
+docker run \
+  --rm \
+  -p5775:5775/udp \
+  -p6831:6831/udp \
+  -p6832:6832/udp \
+  -p5778:5778/tcp \
+  jaegertracing/jaeger-agent:1.13 \
+  --reporter.grpc.host-port=jaeger-collector.jaeger-infra.svc:14250
+
+collector
+收集器是无状态的，因此许多jaeger-collector实例可以并行运行。收集器几乎不需要配置，除了Cassandra集群的位置，via --cassandra.keyspace和--cassandra.serversoptions，或Elasticsearch集群的位置，via --es.server-urls，具体取决于指定的存储。要查看所有命令行选项，
+请运行
+go run ./cmd/collector/main.go -h
+
+如果您没有源代码
+docker run -it --rm jaegertracing/jaeger-collector:1.13 -h
+
+Badger
+Badger是一个嵌入式本地存储，仅适用于一体化发行版。默认情况下，它使用临时文件系统充当临时存储。可以使用该--badger.ephemeral=false选项覆盖此选项
+docker run \
+  -e SPAN_STORAGE_TYPE=badger \
+  -e BADGER_EPHEMERAL=false \
+  -e BADGER_DIRECTORY_VALUE=/badger/data \
+  -e BADGER_DIRECTORY_KEY=/badger/key \
+  -v <storage_dir_on_host>:/badger \
+  -p 16686:16686 \
+  jaegertracing/all-in-one:1.13
+
+Cassandra
+docker run \
+  -e SPAN_STORAGE_TYPE=cassandra \
+  -e CASSANDRA_SERVERS=<...> \
+  jaegertracing/jaeger-collector:1.13
+
+要查看配置选项的完整列表，可以运行以下命令
+docker run \
+  -e SPAN_STORAGE_TYPE=cassandra  \
+  jaegertracing/jaeger-collector:1.13 \
+  --help
+
+运行Elasticsearch
+Jaeger支持自0.6.0以来支持的版本：5.x，6.x
+
+除了安装和运行Elasticsearch之外，Elasticsearch不需要初始化 。运行后，将正确的配置值传递给Jaeger收集器和查询服务
+
+docker run \
+  -e SPAN_STORAGE_TYPE=elasticsearch \
+  -e ES_SERVER_URLS=<...> \
+  jaegertracing/jaeger-collector:1.13
+
+要查看配置选项的完整列表，可以运行以下命令
+docker run \
+  -e SPAN_STORAGE_TYPE=elasticsearch \
+  jaegertracing/jaeger-collector:1.13 \
+  --help
+
+Kafka
+自1.6.0以来在Jaeger中受支持Kafka版本支持：0.9+
+
+Kafka可以用作收集器和实际存储之间的中间缓冲区。收集器配置为SPAN_STORAGE_TYPE=kafka使其将所有已接收的跨度写入Kafka主题。在1.7.0版中添加的新组件Ingester用于从Kafka读取并在另一个存储后端（Elasticsearch或Cassandra）中存储跨度。
+
+写入Kafka对于构建后处理数据管道特别有用
+docker run \
+  -e SPAN_STORAGE_TYPE=kafka \
+  -e KAFKA_BROKERS=<...> \
+  -e KAFKA_TOPIC=<...> \
+  jaegertracing/jaeger-collector:1.13
+
+
+要查看配置选项的完整列表，可以运行以下命令
+docker run \
+  -e SPAN_STORAGE_TYPE=kafka \
+  jaegertracing/jaeger-collector:1.13 \
+  --help
+
+存储插件
+InfluxDB
+docker run \
+  -e SPAN_STORAGE_TYPE=grpc-plugin \
+  -e GRPC_STORAGE_PLUGIN_BINARY=<...> \
+  -e GRPC_STORAGE_PLUGIN_CONFIGURATION_FINE=<...> \
+  jaegertracing/all-in-one:1.13
+
+
+Ingester
+jaeger-ingester是一种从Kafka主题读取跨度数据并将其写入另一个存储后端（Elasticsearch或Cassandra）的服务
+要查看所有公开的配置选项，请运行以下命令
+docker run \
+  -e SPAN_STORAGE_TYPE=cassandra \
+  jaegertracing/jaeger-ingester:1.13
+  --help
+
+查询服务和用户界面
+jaeger-query提供API端点和React / Javascript UI。该服务是无状态的，通常在负载均衡器后面运行，例如NGINX
+docker run -d --rm \
+  -p 16686:16686 \
+  -p 16687:16687 \
+  -e SPAN_STORAGE_TYPE=elasticsearch \
+  -e ES_SERVER_URLS=http://<ES_SERVER_IP>:<ES_SERVER_PORT> \
+  jaegertracing/jaeger-query:1.13
+
+
